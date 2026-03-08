@@ -15,6 +15,7 @@ from . import AqualinkDataUpdateCoordinator
 TO_REDACT = {
     CONF_PASSWORD,
     CONF_USERNAME,
+    "unique_id",
 }
 
 
