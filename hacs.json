@@ -1,0 +1,8 @@
+{
+  "name": "iAqualink Heat Pump",
+  "content_in_root": false,
+  "country": ["US", "FR", "DE", "IT", "ES"],
+  "domains": ["iaqualink_hpm"],
+  "homeassistant": "2025.1.0",
+  "render_readme": true
+}

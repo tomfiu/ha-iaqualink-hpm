@@ -1,0 +1,10 @@
+{
+  "domain": "iaqualink_hpm",
+  "name": "iAqualink Heat Pump",
+  "codeowners": ["@tomfiu"],
+  "config_flow": true,
+  "documentation": "https://github.com/tomfiu/ha-iaqualink-hpm",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "version": "2026.3.11"
+}
