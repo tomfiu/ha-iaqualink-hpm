@@ -10,7 +10,7 @@ from homeassistant.components.climate import (
     ClimateEntityFeature,
     HVACMode,
 )
-from homeassistant.const import ATTR_TEMPERATURE
+from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -49,6 +49,22 @@ def _supports_heatpump_semantics(device: Any) -> bool:
 
 def _supports_thermostat_semantics(device: Any) -> bool:
     return callable(getattr(device, "set_temperature", None))
+
+
+def _is_fahrenheit(device: Any) -> bool:
+    return str(getattr(device, "temperature_unit", "C")).upper().startswith("F")
+
+
+def _ha_temperature_unit(device: Any) -> str:
+    if _is_fahrenheit(device):
+        return UnitOfTemperature.FAHRENHEIT
+    return UnitOfTemperature.CELSIUS
+
+
+def _default_temp_bounds(device: Any) -> tuple[int, int]:
+    if _is_fahrenheit(device):
+        return (41, 104)
+    return (5, 40)
 
 
 async def async_setup_entry(
@@ -94,12 +110,13 @@ class AqualinkThermostatEntity(AqualinkEntity, ClimateEntity):
     def __init__(self, coordinator, system, device: Any) -> None:
         super().__init__(coordinator, system, device)
         self._attr_target_temperature_step = 1
-        self._attr_min_temp = getattr(device, "min_temperature", 5)
-        self._attr_max_temp = getattr(device, "max_temperature", 40)
+        default_min, default_max = _default_temp_bounds(device)
+        self._attr_min_temp = getattr(device, "min_temperature", default_min)
+        self._attr_max_temp = getattr(device, "max_temperature", default_max)
 
     @property
     def temperature_unit(self) -> str:
-        return getattr(self._device, "temperature_unit", "C")
+        return _ha_temperature_unit(self._device)
 
     @property
     def current_temperature(self) -> float | None:
@@ -142,12 +159,13 @@ class AqualinkHeatPumpEntity(AqualinkEntity, ClimateEntity):
     def __init__(self, coordinator, system, device: Any) -> None:
         super().__init__(coordinator, system, device)
         self._attr_target_temperature_step = 1
-        self._attr_min_temp = getattr(device, "min_temperature", 5)
-        self._attr_max_temp = getattr(device, "max_temperature", 40)
+        default_min, default_max = _default_temp_bounds(device)
+        self._attr_min_temp = getattr(device, "min_temperature", default_min)
+        self._attr_max_temp = getattr(device, "max_temperature", default_max)
 
     @property
     def temperature_unit(self) -> str:
-        return getattr(self._device, "temperature_unit", "C")
+        return _ha_temperature_unit(self._device)
 
     @property
     def current_temperature(self) -> float | None:

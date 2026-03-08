@@ -230,14 +230,53 @@ async def _async_probe_raw_systems_payload(client: Any) -> list[dict[str, Any]]:
 
 def _merge_system_state(existing_system: Any, latest_system: Any) -> None:
     """Merge latest state into existing system/device objects used by entities."""
-    existing_system.__dict__.update(vars(latest_system))
-    latest_devices_by_key = {
-        device.key: device for device in getattr(latest_system, "devices", [])
+    try:
+        latest_attrs = vars(latest_system)
+    except TypeError:
+        latest_attrs = {}
+
+    # Preserve existing device object identity to keep entity references valid.
+    for key, value in latest_attrs.items():
+        if key == "devices":
+            continue
+        setattr(existing_system, key, value)
+
+    existing_devices = list(getattr(existing_system, "devices", []))
+    latest_devices = list(getattr(latest_system, "devices", []))
+
+    def _device_key(device: Any) -> str | None:
+        key = getattr(device, "key", None)
+        if key is None:
+            return None
+        return str(key).lower()
+
+    existing_by_key = {
+        key: device
+        for device in existing_devices
+        if (key := _device_key(device)) is not None
     }
-    for existing_device in getattr(existing_system, "devices", []):
-        latest_device = latest_devices_by_key.get(existing_device.key)
-        if latest_device is not None:
+
+    merged_devices: list[Any] = []
+    for latest_device in latest_devices:
+        latest_key = _device_key(latest_device)
+        if latest_key is None:
+            merged_devices.append(latest_device)
+            continue
+
+        existing_device = existing_by_key.pop(latest_key, None)
+        if existing_device is None:
+            merged_devices.append(latest_device)
+            continue
+
+        try:
             existing_device.__dict__.update(vars(latest_device))
+        except TypeError:
+            pass
+        merged_devices.append(existing_device)
+
+    # Keep previously known devices that are temporarily missing from payload.
+    merged_devices.extend(existing_by_key.values())
+    existing_system.devices = merged_devices
 
 
 def _snapshot_device(device: Any) -> dict[str, Any]:
