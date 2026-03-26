@@ -153,6 +153,7 @@ class AqualinkHeatPump(AqualinkDevice):
         self.can_heat = True
         self.can_cool = True
         self.preset_mode = "normal"
+        self.air_temperature: float | None = None
         super().__init__(client, serial_number, raw)
 
     def update_from_raw(self, raw: dict[str, Any]) -> None:
@@ -164,6 +165,19 @@ class AqualinkHeatPump(AqualinkDevice):
         can_cool = _resolve_first(raw, "can_cool", "cool_enabled")
         self.can_heat = True if can_heat is None else _to_bool(can_heat)
         self.can_cool = True if can_cool is None else _to_bool(can_cool)
+
+        self.air_temperature = _to_float(
+            _resolve_first(
+                raw,
+                "air_temperature",
+                "air_temp",
+                "ambient_temp",
+                "ambient_temperature",
+                "outdoor_temp",
+                "outside_temp",
+                "inlet_air_temp",
+            )
+        )
 
         # Derive preset from dedicated fields or boolean flags.
         raw_preset = _resolve_first(raw, "preset", "preset_mode")

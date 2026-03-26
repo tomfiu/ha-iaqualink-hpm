@@ -1,4 +1,4 @@
-"""Sensor entities for iAqualink HPM - temperature and mode metrics."""
+"""Sensor entities for iAqualink HPM - temperature, mode, and status metrics."""
 
 from __future__ import annotations
 
@@ -36,8 +36,11 @@ async def async_setup_entry(
                 continue
             entities.append(AqualinkTemperatureSensor(coordinator, system, device))
             entities.append(AqualinkTargetTemperatureSensor(coordinator, system, device))
+            entities.append(AqualinkStatusSensor(coordinator, system, device))
             if isinstance(device, AqualinkHeatPump):
+                entities.append(AqualinkAirTemperatureSensor(coordinator, system, device))
                 entities.append(AqualinkModeSensor(coordinator, system, device))
+                entities.append(AqualinkPresetSensor(coordinator, system, device))
 
     _LOGGER.debug("Adding %s sensor entities", len(entities))
     async_add_entities(entities)
@@ -58,7 +61,7 @@ class _AqualinkSensorBase(AqualinkEntity, SensorEntity):
 
 
 class AqualinkTemperatureSensor(_AqualinkSensorBase):
-    """Current water/air temperature reported by the device."""
+    """Current water temperature reported by the device."""
 
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -95,8 +98,40 @@ class AqualinkTargetTemperatureSensor(_AqualinkSensorBase):
         return getattr(self._device, "target_temperature", None)
 
 
+class AqualinkAirTemperatureSensor(_AqualinkSensorBase):
+    """Ambient air temperature measured by the heat pump."""
+
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_name = "Air Temperature"
+
+    def __init__(self, coordinator: Any, system: Any, device: Any) -> None:
+        super().__init__(coordinator, system, device, "air_temperature")
+
+    @property
+    def native_unit_of_measurement(self) -> str:
+        return _ha_temperature_unit(self._device)
+
+    @property
+    def native_value(self) -> float | None:
+        return getattr(self._device, "air_temperature", None)
+
+
+class AqualinkStatusSensor(_AqualinkSensorBase):
+    """Operational/connection status of the device."""
+
+    _attr_name = "Status"
+
+    def __init__(self, coordinator: Any, system: Any, device: Any) -> None:
+        super().__init__(coordinator, system, device, "status")
+
+    @property
+    def native_value(self) -> str | None:
+        return getattr(self._device, "status", None)
+
+
 class AqualinkModeSensor(_AqualinkSensorBase):
-    """Current operation mode of the heat pump."""
+    """Current operation mode of the heat pump (off/heat/cool/auto)."""
 
     _attr_name = "Mode"
 
@@ -106,3 +141,16 @@ class AqualinkModeSensor(_AqualinkSensorBase):
     @property
     def native_value(self) -> str | None:
         return getattr(self._device, "operation_mode", None)
+
+
+class AqualinkPresetSensor(_AqualinkSensorBase):
+    """Current preset of the heat pump (normal/boost/quiet)."""
+
+    _attr_name = "Preset"
+
+    def __init__(self, coordinator: Any, system: Any, device: Any) -> None:
+        super().__init__(coordinator, system, device, "preset")
+
+    @property
+    def native_value(self) -> str | None:
+        return getattr(self._device, "preset_mode", None)
