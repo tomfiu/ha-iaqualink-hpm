@@ -15,6 +15,7 @@ from typing import Any
 _LOGGER = logging.getLogger(__name__)
 
 LOGIN_URL = "https://prod.zodiac-io.com/users/v1/login"
+REFRESH_URL = "https://prod.zodiac-io.com/users/v1/login"
 SYSTEMS_URL = "https://r-api.iaqualink.net/devices.json"
 DEVICE_SHADOW_URL = "https://prod.zodiac-io.com/devices/v1/{serial}/shadow"
 DEVICE_COMMAND_URL = "https://prod.zodiac-io.com/devices/v1/{serial}/shadow"
@@ -353,6 +354,7 @@ class AqualinkClient:
         self.serial_number = serial_number
         self._token: str | None = None
         self._id_token: str | None = None
+        self._refresh_token: str | None = None
         self._user_id: str | None = None
         self.client_id: str | None = None
         self._client = httpx_client
@@ -385,12 +387,14 @@ class AqualinkClient:
             if token and user_id:
                 self._token = token
                 self._id_token = _extract_id_token(data)
+                self._refresh_token = _extract_refresh_token(data)
                 self._user_id = user_id
                 self.client_id = session_id
                 _LOGGER.debug(
-                    "Login succeeded: authentication_token=%s id_token=%s",
+                    "Login succeeded: authentication_token=%s id_token=%s refresh_token=%s",
                     "set" if self._token else "missing",
                     "set" if self._id_token else "missing",
+                    "set" if self._refresh_token else "missing",
                 )
                 return
 
@@ -407,6 +411,68 @@ class AqualinkClient:
             )
             raise last_error
         raise AqualinkAuthenticationException("Login failed")
+
+    async def refresh_tokens(self) -> None:
+        """Use the Cognito refresh token to obtain a new id_token without full login.
+
+        Falls back to a full login() if no refresh token is available or the
+        refresh request fails.
+        """
+        if not self._refresh_token:
+            _LOGGER.debug("No refresh token available, falling back to full login")
+            await self.login()
+            return
+
+        payload = {
+            "api_key": API_KEY,
+            "refresh_token": self._refresh_token,
+        }
+        try:
+            data = await self._request_json(
+                "POST", REFRESH_URL, json=payload, auth_required=False,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "Token refresh failed (type=%s: %s), falling back to full login",
+                err.__class__.__name__,
+                err,
+            )
+            await self.login()
+            return
+
+        if not isinstance(data, dict):
+            _LOGGER.debug("Token refresh returned non-dict, falling back to full login")
+            await self.login()
+            return
+
+        # Check for error response.
+        error = data.get("error")
+        if isinstance(error, dict):
+            _LOGGER.debug("Token refresh returned error: %s, falling back to full login", error)
+            await self.login()
+            return
+
+        new_id_token = _extract_id_token(data)
+        new_auth_token = _extract_auth_token(data)
+        new_refresh = _extract_refresh_token(data)
+
+        if new_id_token:
+            self._id_token = new_id_token
+        if new_auth_token:
+            self._token = new_auth_token
+        if new_refresh:
+            self._refresh_token = new_refresh
+
+        if new_id_token or new_auth_token:
+            _LOGGER.debug(
+                "Token refresh succeeded: id_token=%s auth_token=%s refresh_token=%s",
+                "updated" if new_id_token else "unchanged",
+                "updated" if new_auth_token else "unchanged",
+                "updated" if new_refresh else "unchanged",
+            )
+        else:
+            _LOGGER.debug("Token refresh returned no new tokens, falling back to full login")
+            await self.login()
 
     async def get_systems(self) -> list[AqualinkSystem]:
         """Fetch and parse account systems/devices."""
@@ -425,10 +491,10 @@ class AqualinkClient:
         try:
             shadow = await self._fetch_shadow(serial)
         except AqualinkAuthenticationException:
-            # id_token (JWT) expired — re-login to obtain a fresh one and retry.
-            _LOGGER.debug("Shadow auth expired for serial=%s, re-logging in", serial)
+            # id_token (JWT) expired — refresh to obtain a fresh one and retry.
+            _LOGGER.debug("Shadow auth expired for serial=%s, refreshing tokens", serial)
             try:
-                await self.login()
+                await self.refresh_tokens()
                 shadow = await self._fetch_shadow(serial)
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug(
@@ -642,6 +708,29 @@ def _build_login_payloads(username: str, password: str) -> list[dict[str, Any]]:
         seen.add(key)
         unique.append(payload)
     return unique
+
+
+def _extract_refresh_token(payload: Any) -> str | None:
+    """Extract the Cognito refresh token from a Zodiac login/refresh response."""
+    if not isinstance(payload, dict):
+        return None
+    for pool_key in ("userPoolOAuth", "cognito", "oauthTokens"):
+        pool = payload.get(pool_key)
+        if isinstance(pool, dict):
+            for key in ("RefreshToken", "refresh_token", "refreshToken"):
+                value = pool.get(key)
+                if isinstance(value, str) and len(value) >= 20:
+                    return value
+    for key in ("RefreshToken", "refresh_token", "refreshToken"):
+        value = payload.get(key)
+        if isinstance(value, str) and len(value) >= 20:
+            return value
+    for value in payload.values():
+        if isinstance(value, dict):
+            token = _extract_refresh_token(value)
+            if token:
+                return token
+    return None
 
 
 def _extract_id_token(payload: Any) -> str | None:

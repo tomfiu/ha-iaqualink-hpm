@@ -477,13 +477,18 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise _map_runtime_error(ex) from ex
 
     async def _fetch_systems_with_relogin(self) -> list[Any]:
-        """Fetch systems, re-authenticating once if the token has expired."""
+        """Fetch systems, refreshing tokens once if authentication has expired."""
         try:
             return await _async_get_systems_from_client(self._account_client)
         except Exception as ex:  # noqa: BLE001
             if ex.__class__.__name__ == "AqualinkAuthenticationException":
-                _LOGGER.debug("Token expired during refresh, re-logging in")
-                await _async_login_if_supported(self._account_client)
+                refresh = getattr(self._account_client, "refresh_tokens", None)
+                if callable(refresh):
+                    _LOGGER.debug("Token expired during refresh, refreshing tokens")
+                    await _async_call(refresh)
+                else:
+                    _LOGGER.debug("Token expired during refresh, re-logging in")
+                    await _async_login_if_supported(self._account_client)
                 return await _async_get_systems_from_client(self._account_client)
             raise
 
