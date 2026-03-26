@@ -240,6 +240,7 @@ class AqualinkClient:
         self._password = password
         self.serial_number = serial_number
         self._token: str | None = None
+        self._id_token: str | None = None
         self._user_id: str | None = None
         self.client_id: str | None = None
         self._client = httpx_client
@@ -271,8 +272,14 @@ class AqualinkClient:
             session_id = _extract_session_id(data)
             if token and user_id:
                 self._token = token
+                self._id_token = _extract_id_token(data)
                 self._user_id = user_id
                 self.client_id = session_id
+                _LOGGER.debug(
+                    "Login succeeded: authentication_token=%s id_token=%s",
+                    "set" if self._token else "missing",
+                    "set" if self._id_token else "missing",
+                )
                 return
 
             last_error = AqualinkAuthenticationException(
@@ -390,7 +397,10 @@ class AqualinkClient:
         if auth_required:
             if not self._token or not self._user_id:
                 raise AqualinkAuthenticationException("Client is not authenticated")
-            headers["Authorization"] = f"Bearer {self._token}"
+            # prod.zodiac-io.com uses the Cognito id_token as Bearer.
+            # r-api.iaqualink.net uses authentication_token as a query param (passed by callers).
+            bearer = self._id_token or self._token
+            headers["Authorization"] = f"Bearer {bearer}"
 
         try:
             response = await self._client.request(
@@ -503,6 +513,36 @@ def _build_login_payloads(username: str, password: str) -> list[dict[str, Any]]:
         seen.add(key)
         unique.append(payload)
     return unique
+
+
+def _extract_id_token(payload: Any) -> str | None:
+    """Extract the Cognito id_token from the Zodiac login response.
+
+    The Zodiac login returns a ``userPoolOAuth`` object containing Cognito tokens
+    (``IdToken``, ``AccessToken``, etc.) needed for ``prod.zodiac-io.com`` endpoints.
+    Falls back to any ``id_token`` / ``IdToken`` found elsewhere in the payload.
+    """
+    if not isinstance(payload, dict):
+        return None
+    # Prefer the Cognito pool token object.
+    for pool_key in ("userPoolOAuth", "cognito", "oauthTokens"):
+        pool = payload.get(pool_key)
+        if isinstance(pool, dict):
+            for key in ("IdToken", "id_token", "idToken"):
+                value = pool.get(key)
+                if isinstance(value, str) and len(value) >= 20:
+                    return value
+    # Fall back to any id_token at top level or nested dicts.
+    for key in ("IdToken", "id_token", "idToken"):
+        value = payload.get(key)
+        if isinstance(value, str) and len(value) >= 20:
+            return value
+    for value in payload.values():
+        if isinstance(value, dict):
+            token = _extract_id_token(value)
+            if token:
+                return token
+    return None
 
 
 def _extract_auth_token(payload: Any) -> str | None:
