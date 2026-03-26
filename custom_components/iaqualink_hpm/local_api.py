@@ -34,6 +34,23 @@ class AqualinkServiceException(Exception):
     """Raised when API returns an unexpected service response."""
 
 
+def _extract_hp_state(raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract the first heat-pump equipment block from a raw shadow payload.
+
+    Zodiac shadow payloads nest device telemetry under ``equipment.hp_0`` (or
+    ``hp_1``, etc.).  Returns the first matching block, or ``None`` if absent.
+    """
+    equipment = raw.get("equipment")
+    if not isinstance(equipment, dict):
+        return None
+    for key in sorted(equipment.keys()):
+        if key.startswith("hp"):
+            val = equipment[key]
+            if isinstance(val, dict):
+                return val
+    return None
+
+
 def _resolve_first(raw: dict[str, Any], *keys: str) -> Any:
     """Resolve first non-empty value for known payload aliases."""
     for key in keys:
@@ -156,12 +173,22 @@ class AqualinkHeatPump(AqualinkDevice):
         self.can_cool = True
         self.preset_mode = "normal"
         self.air_temperature: float | None = None
+        # Fields from equipment.hp_0 shadow block.
+        self.fan_speed: int | None = None
+        self.water_flow: bool | None = None
+        self.cooling_active: bool | None = None
+        self.heating_active: bool | None = None
+        self.led_on: bool | None = None
+        self.reason_code: int | None = None
+        self.board_firmware: str | None = None
+        # Fields from the top-level shadow debug block.
+        self.wifi_rssi: int | None = None
         super().__init__(client, serial_number, raw)
 
     def update_from_raw(self, raw: dict[str, Any]) -> None:
         super().update_from_raw(raw)
         self.operation_mode = _normalize_mode(
-            _resolve_first(raw, "operation_mode", "mode", "state", "hvac_mode")
+            _resolve_first(raw, "operation_mode", "mode", "hvac_mode")
         )
         can_heat = _resolve_first(raw, "can_heat", "heat_enabled")
         can_cool = _resolve_first(raw, "can_cool", "cool_enabled")
@@ -191,6 +218,91 @@ class AqualinkHeatPump(AqualinkDevice):
             self.preset_mode = "quiet"
         else:
             self.preset_mode = "normal"
+
+        # Override with values from the Zodiac equipment block (equipment.hp_0).
+        # This nested structure is returned by the shadow endpoint and contains
+        # the authoritative sensor readings, setpoint, and operational state.
+        hp = _extract_hp_state(raw)
+        if hp is not None:
+            self._apply_hp_equipment_state(hp)
+
+        # WiFi RSSI from the debug block.
+        debug = raw.get("debug")
+        if isinstance(debug, dict):
+            rssi = debug.get("RSSI")
+            if rssi is not None:
+                self.wifi_rssi = int(rssi)
+
+    def _apply_hp_equipment_state(self, hp: dict[str, Any]) -> None:
+        """Parse temperatures, setpoint and mode from the equipment.hp_0 block."""
+        # Sensor readings: sns_1 (water), sns_2 (air), etc.
+        for val in hp.values():
+            if not isinstance(val, dict):
+                continue
+            sensor_type = str(val.get("type") or "").lower()
+            sensor_value = _to_float(val.get("value"))
+            if sensor_value is None:
+                continue
+            if sensor_type == "water":
+                self.temperature = sensor_value
+            elif sensor_type == "air":
+                self.air_temperature = sensor_value
+
+        # Target set-point temperature (tsp field).
+        tsp = _to_float(hp.get("tsp"))
+        if tsp is not None:
+            self.target_temperature = tsp
+
+        # Minimum setpoint from tmp field.
+        tmp_min = _to_float(hp.get("tmp"))
+        if tmp_min is not None:
+            self.min_temperature = int(tmp_min)
+
+        # Status code.
+        status_val = hp.get("status")
+        if status_val is not None:
+            self.status = str(status_val)
+
+        # Operation mode from state (on/off), hp (heating), cl (cooling) flags.
+        hp_state = hp.get("state")
+        if hp_state is not None:
+            if not _to_bool(hp_state):
+                self.operation_mode = "off"
+            elif _to_bool(hp.get("hp")):
+                self.operation_mode = "heat"
+            elif _to_bool(hp.get("cl")):
+                self.operation_mode = "cool"
+            else:
+                self.operation_mode = "auto"
+
+        # Boolean flag sensors.
+        wf = hp.get("wf")
+        if wf is not None:
+            self.water_flow = _to_bool(wf)
+        cl = hp.get("cl")
+        if cl is not None:
+            self.cooling_active = _to_bool(cl)
+        hp_flag = hp.get("hp")
+        if hp_flag is not None:
+            self.heating_active = _to_bool(hp_flag)
+        led = hp.get("led")
+        if led is not None:
+            self.led_on = _to_bool(led)
+
+        # Fan speed level.
+        fan = hp.get("fan")
+        if fan is not None:
+            self.fan_speed = int(fan)
+
+        # Reason / error code.
+        reason = hp.get("reason")
+        if reason is not None:
+            self.reason_code = int(reason)
+
+        # Board firmware version.
+        vr = hp.get("vr")
+        if isinstance(vr, str) and vr:
+            self.board_firmware = vr
 
     async def set_operation_mode(self, mode: str) -> Any:
         normalized = _normalize_mode(mode)
@@ -730,7 +842,7 @@ def _parse_systems(client: AqualinkClient, payload: Any) -> list[AqualinkSystem]
 
         model = str(_resolve_across_records(serial_records, "model", "device_model", "product_name") or "")
         name = str(_resolve_across_records(serial_records, "name", "system_name", "label") or serial)
-        version = _resolve_across_records(serial_records, "version", "firmware", "software_version")
+        version = _resolve_across_records(serial_records, "version", "firmware", "software_version", "vr")
 
         systems.append(
             AqualinkSystem(

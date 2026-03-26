@@ -295,6 +295,14 @@ def _snapshot_device(device: Any) -> dict[str, Any]:
         "temperature_unit",
         "min_temperature",
         "max_temperature",
+        "fan_speed",
+        "water_flow",
+        "cooling_active",
+        "heating_active",
+        "led_on",
+        "reason_code",
+        "board_firmware",
+        "wifi_rssi",
     )
     snapshot = {attr: getattr(device, attr, None) for attr in attrs}
     snapshot["raw"] = dict(getattr(device, "_raw", {}))

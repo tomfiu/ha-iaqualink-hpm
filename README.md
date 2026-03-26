@@ -2,7 +2,7 @@
 
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/)
 ![Home Assistant](https://img.shields.io/badge/Home%20Assistant-2025.1.0%2B-blue.svg)
-![Integration](https://img.shields.io/badge/Integration-climate-green.svg)
+![Platforms](https://img.shields.io/badge/Platforms-climate%20%7C%20sensor-green.svg)
 
 Custom Home Assistant integration for iAqualink heat pump systems (`hpm`), including Zodiac Z400iq.
 
@@ -19,6 +19,7 @@ This custom integration exists to close that gap and provide practical heat pump
 
 - Designed for iAqualink heat pump systems (`hpm`)
 - Exposes heat pump controls through Home Assistant `climate`
+- Exposes heat pump telemetry through Home Assistant `sensor`
 - Keeps using iAqualink cloud authentication and APIs
 
 If your setup is only a pool/spa system, the built-in Home Assistant integration is typically the better default choice.
@@ -26,12 +27,11 @@ If your setup is only a pool/spa system, the built-in Home Assistant integration
 ## Features
 
 - Native UI config flow (`username` / `password`)
-- Cloud polling through the iAqualink API
+- Cloud polling through the iAqualink API (device shadow endpoint)
 - Automatic HPM system discovery
-- Climate support for `AqualinkHeatPump`
-- Climate support for `AqualinkThermostat` (when exposed by the account payload)
-- HVAC mode mapping: iAqualink `off` / `heat` / `cool` / `auto`
-- HVAC mode mapping: Home Assistant `off` / `heat` / `cool` / `heat_cool`
+- Climate entity with HVAC mode and preset mode control
+- Sensor entities for temperature, mode, and operational state
+- HA Diagnostics support
 
 ## Requirements
 
@@ -59,11 +59,42 @@ If at least one HPM system is found, setup completes automatically.
 
 ## Entities
 
-This integration currently creates `climate` entities only.
+### Climate
 
-Typical behavior:
-- The device can be discovered even while physically offline.
-- In that case, entity values may be unavailable until the next successful cloud refresh.
+One `climate` entity per heat pump device.
+
+| Feature | Details |
+|---------|---------|
+| HVAC modes | `off` / `heat` / `cool` / `heat_cool` |
+| Preset modes | `normal` / `boost` / `quiet` |
+| Target temperature | Adjustable set-point |
+
+### Sensors (always enabled)
+
+| Entity | Description |
+|--------|-------------|
+| Temperature | Current water temperature |
+| Target Temperature | Current set-point temperature |
+| Air Temperature | Ambient air temperature measured by the unit |
+| Status | Raw status code from the device |
+| Mode | Current HVAC mode (`off` / `heat` / `cool` / `auto`) |
+| Preset | Current preset (`normal` / `boost` / `quiet`) |
+
+### Sensors (disabled by default)
+
+These sensors are created but not enabled by default to keep the default view clean.
+To enable one: `Settings` → `Devices & Services` → your device → click the entity → toggle **Enable**.
+
+| Entity | Description |
+|--------|-------------|
+| Fan Speed | Fan speed level |
+| Water Flow | Water flow status (`on` / `off`) |
+| Heating Active | Whether the unit is actively heating |
+| Cooling Active | Whether the unit is actively cooling |
+| LED | LED indicator status |
+| Reason Code | Internal reason / error code |
+| Board Firmware | Firmware version of the heat pump main board |
+| WiFi Signal | WiFi signal strength (dBm) |
 
 ## Polling
 
@@ -75,7 +106,7 @@ Typical behavior:
 ### No entities appear
 
 1. Confirm logs show at least one discovered system with `type: hpm`.
-2. Confirm platform forwarding line appears in logs (`platforms=['climate']`).
+2. Confirm platform forwarding line appears in logs (`platforms=['climate', 'sensor']`).
 3. Restart Home Assistant after updating the integration.
 
 ### Invalid authentication
@@ -83,6 +114,12 @@ Typical behavior:
 - Re-enter credentials in the integration config flow.
 - Verify login on the official iAqualink app/site with the same account.
 - Check for failed auth entries in Home Assistant logs.
+
+### Sensor values are unavailable
+
+- The integration polls the Zodiac device shadow endpoint for telemetry.
+- If the device is offline or not reporting to the cloud, values will be unavailable until the next successful refresh.
+- Check that `Shadow payload for serial=...` appears in debug logs.
 
 ### Enable debug logging
 
@@ -110,7 +147,7 @@ Diagnostics can be downloaded from:
 Diagnostics include:
 - Redacted config entry data
 - Selected systems summary
-- Full discovered account systems snapshot
+- Full discovered account systems snapshot (including raw shadow payload)
 - Last coordinator payload
 
 ## License
