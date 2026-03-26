@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from homeassistant.components.climate import (
+    PRESET_BOOST,
     ClimateEntity,
     ClimateEntityFeature,
     HVACMode,
@@ -26,6 +27,11 @@ OPERATION_TO_HVAC: dict[str, HVACMode] = {
 }
 
 HVAC_TO_OPERATION: dict[HVACMode, str] = {value: key for key, value in OPERATION_TO_HVAC.items()}
+
+PRESET_QUIET = "quiet"
+PRESET_NORMAL = "normal"
+HEAT_PUMP_PRESETS = [PRESET_NORMAL, PRESET_BOOST, PRESET_QUIET]
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -153,8 +159,9 @@ class AqualinkThermostatEntity(AqualinkEntity, ClimateEntity):
 class AqualinkHeatPumpEntity(AqualinkEntity, ClimateEntity):
     """Representation of an iAqualink heat pump (HPM systems)."""
 
-    _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE
+    _attr_supported_features = ClimateEntityFeature.TARGET_TEMPERATURE | ClimateEntityFeature.PRESET_MODE
     _attr_name = "Heat Pump"
+    _attr_preset_modes = HEAT_PUMP_PRESETS
 
     def __init__(self, coordinator, system, device: Any) -> None:
         super().__init__(coordinator, system, device)
@@ -189,6 +196,22 @@ class AqualinkHeatPumpEntity(AqualinkEntity, ClimateEntity):
         if getattr(self._device, "can_heat", True) and getattr(self._device, "can_cool", True):
             modes.append(HVACMode.HEAT_COOL)
         return modes
+
+    @property
+    def preset_mode(self) -> str:
+        return getattr(self._device, "preset_mode", PRESET_NORMAL) or PRESET_NORMAL
+
+    async def async_set_preset_mode(self, preset_mode: str) -> None:
+        _LOGGER.debug(
+            "Heat pump set_preset_mode requested device=%s preset=%s",
+            getattr(self._device, "key", None),
+            preset_mode,
+        )
+        set_preset = _resolve_callable(self._device, "set_preset_mode", "async_set_preset_mode")
+        if set_preset is None:
+            return
+        await self.coordinator.async_call_api(set_preset, preset_mode)
+        await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         mode = HVAC_TO_OPERATION.get(hvac_mode)
