@@ -528,6 +528,8 @@ class AqualinkClient:
 
         if response.status_code in {401, 403}:
             raise AqualinkAuthenticationException(f"Unauthorized ({response.status_code})")
+        if response.status_code == 429:
+            raise AqualinkApiConnectionException("Rate limited (429): too many requests")
         if response.status_code == 400:
             body = response.text.lower()
             if any(token in body for token in ("unauthorized", "authentication", "invalid token")):
