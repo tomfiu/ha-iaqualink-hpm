@@ -434,8 +434,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Refresh systems and mutate existing objects so entities update cleanly."""
         _LOGGER.debug("Starting coordinator refresh for %s tracked systems", len(self._systems_by_serial))
         try:
-            await _async_login_if_supported(self._account_client)
-            latest_systems = await _async_get_systems_from_client(self._account_client)
+            latest_systems = await self._fetch_systems_with_relogin()
             latest_by_serial = {
                 system.serial_number: system
                 for system in latest_systems
@@ -459,8 +458,26 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 for serial, system in self._systems_by_serial.items()
             }
         except Exception as ex:  # noqa: BLE001
+            # On rate-limiting keep the previous data so entities stay available.
+            if "429" in str(ex) or "rate limit" in str(ex).lower():
+                _LOGGER.warning(
+                    "Zodiac API rate limit hit, retaining previous sensor values until next poll"
+                )
+                if self.data is not None:
+                    return self.data
             _LOGGER.debug("Coordinator refresh failed: type=%s error=%s", ex.__class__.__name__, ex)
             raise _map_runtime_error(ex) from ex
+
+    async def _fetch_systems_with_relogin(self) -> list[Any]:
+        """Fetch systems, re-authenticating once if the token has expired."""
+        try:
+            return await _async_get_systems_from_client(self._account_client)
+        except Exception as ex:  # noqa: BLE001
+            if ex.__class__.__name__ == "AqualinkAuthenticationException":
+                _LOGGER.debug("Token expired during refresh, re-logging in")
+                await _async_login_if_supported(self._account_client)
+                return await _async_get_systems_from_client(self._account_client)
+            raise
 
     async def async_call_api(
         self,
