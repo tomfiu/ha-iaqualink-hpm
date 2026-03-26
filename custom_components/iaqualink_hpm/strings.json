@@ -19,5 +19,15 @@
     "abort": {
       "already_configured": "Account is already configured"
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "iAqualink Heat Pump options",
+        "data": {
+          "scan_interval": "Polling interval (seconds)"
+        }
+      }
+    }
   }
 }

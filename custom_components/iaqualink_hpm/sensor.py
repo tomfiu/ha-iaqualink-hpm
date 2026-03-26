@@ -129,6 +129,13 @@ class AqualinkAirTemperatureSensor(_AqualinkSensorBase):
         return getattr(self._device, "air_temperature", None)
 
 
+_STATUS_MAP = {
+    "0": "off",
+    "1": "standby",
+    "2": "heating",
+}
+
+
 class AqualinkStatusSensor(_AqualinkSensorBase):
     """Operational/connection status of the device."""
 
@@ -139,7 +146,10 @@ class AqualinkStatusSensor(_AqualinkSensorBase):
 
     @property
     def native_value(self) -> str | None:
-        return getattr(self._device, "status", None)
+        raw = getattr(self._device, "status", None)
+        if raw is None:
+            return None
+        return _STATUS_MAP.get(str(raw), str(raw))
 
 
 class AqualinkModeSensor(_AqualinkSensorBase):
