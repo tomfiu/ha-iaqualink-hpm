@@ -242,10 +242,11 @@ class TestAqualinkClientAsync(unittest.IsolatedAsyncioTestCase):
             json: dict[str, object] | None = None,
             auth_required: bool,
         ) -> object:
-            del method, url, json, auth_required
-            assert params is not None
-            calls.append(params)
-            if params["value"] == "heat":
+            del method, url, params, auth_required
+            assert json is not None
+            desired = json["state"]["desired"]  # type: ignore[index]
+            calls.append(desired)
+            if list(desired.values())[0] == "heat":
                 return {"ok": True}
             raise AqualinkServiceException("unsupported numeric value")
 
@@ -260,7 +261,8 @@ class TestAqualinkClientAsync(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, {"ok": True})
-        self.assertEqual([call["value"] for call in calls], [1, 1, 1, "heat"])
+        # First attempt uses numeric value 1, second falls back to text "heat".
+        self.assertEqual([list(c.values())[0] for c in calls], [1, "heat"])
 
     async def test_send_device_command_raises_last_service_error(self) -> None:
         client = AqualinkClient("u", "p", httpx_client=_DummyHttpClient([]))
@@ -276,9 +278,10 @@ class TestAqualinkClientAsync(unittest.IsolatedAsyncioTestCase):
             json: dict[str, object] | None = None,
             auth_required: bool,
         ) -> object:
-            del method, url, json, auth_required
-            assert params is not None
-            calls.append(params)
+            del method, url, params, auth_required
+            assert json is not None
+            desired = json["state"]["desired"]  # type: ignore[index]
+            calls.append(desired)
             raise AqualinkServiceException(f"failure-{len(calls)}")
 
         client._request_json = _always_fail  # type: ignore[method-assign]
@@ -291,5 +294,5 @@ class TestAqualinkClientAsync(unittest.IsolatedAsyncioTestCase):
                 value=7,
             )
 
-        self.assertIn("failure-6", str(ctx.exception))
-        self.assertEqual(len(calls), 6)
+        self.assertIn("failure-2", str(ctx.exception))
+        self.assertEqual(len(calls), 2)

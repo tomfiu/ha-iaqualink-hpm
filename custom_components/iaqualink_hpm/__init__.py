@@ -85,7 +85,7 @@ def _snapshot_system_full(system: Any) -> dict[str, Any]:
     }
     try:
         for key, value in vars(system).items():
-            if key == "devices":
+            if key in {"devices", "client"}:
                 continue
             data[key] = _sanitize(value)
     except TypeError:
