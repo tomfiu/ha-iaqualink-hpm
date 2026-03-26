@@ -281,8 +281,24 @@ def _merge_system_state(existing_system: Any, latest_system: Any) -> None:
 
 def _snapshot_device(device: Any) -> dict[str, Any]:
     """Return a diagnostics-friendly device snapshot."""
-    attrs = ("key", "name", "status", "temperature", "target_temperature", "operation_mode")
-    return {attr: getattr(device, attr, None) for attr in attrs}
+    attrs = (
+        "key",
+        "name",
+        "status",
+        "temperature",
+        "target_temperature",
+        "air_temperature",
+        "operation_mode",
+        "preset_mode",
+        "can_heat",
+        "can_cool",
+        "temperature_unit",
+        "min_temperature",
+        "max_temperature",
+    )
+    snapshot = {attr: getattr(device, attr, None) for attr in attrs}
+    snapshot["raw"] = dict(getattr(device, "_raw", {}))
+    return snapshot
 
 
 def _snapshot_system(system: Any) -> dict[str, Any]:
