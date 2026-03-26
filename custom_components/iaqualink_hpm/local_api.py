@@ -173,6 +173,16 @@ class AqualinkHeatPump(AqualinkDevice):
         self.can_cool = True
         self.preset_mode = "normal"
         self.air_temperature: float | None = None
+        # Fields from equipment.hp_0 shadow block.
+        self.fan_speed: int | None = None
+        self.water_flow: bool | None = None
+        self.cooling_active: bool | None = None
+        self.heating_active: bool | None = None
+        self.led_on: bool | None = None
+        self.reason_code: int | None = None
+        self.board_firmware: str | None = None
+        # Fields from the top-level shadow debug block.
+        self.wifi_rssi: int | None = None
         super().__init__(client, serial_number, raw)
 
     def update_from_raw(self, raw: dict[str, Any]) -> None:
@@ -216,6 +226,13 @@ class AqualinkHeatPump(AqualinkDevice):
         if hp is not None:
             self._apply_hp_equipment_state(hp)
 
+        # WiFi RSSI from the debug block.
+        debug = raw.get("debug")
+        if isinstance(debug, dict):
+            rssi = debug.get("RSSI")
+            if rssi is not None:
+                self.wifi_rssi = int(rssi)
+
     def _apply_hp_equipment_state(self, hp: dict[str, Any]) -> None:
         """Parse temperatures, setpoint and mode from the equipment.hp_0 block."""
         # Sensor readings: sns_1 (water), sns_2 (air), etc.
@@ -257,6 +274,35 @@ class AqualinkHeatPump(AqualinkDevice):
                 self.operation_mode = "cool"
             else:
                 self.operation_mode = "auto"
+
+        # Boolean flag sensors.
+        wf = hp.get("wf")
+        if wf is not None:
+            self.water_flow = _to_bool(wf)
+        cl = hp.get("cl")
+        if cl is not None:
+            self.cooling_active = _to_bool(cl)
+        hp_flag = hp.get("hp")
+        if hp_flag is not None:
+            self.heating_active = _to_bool(hp_flag)
+        led = hp.get("led")
+        if led is not None:
+            self.led_on = _to_bool(led)
+
+        # Fan speed level.
+        fan = hp.get("fan")
+        if fan is not None:
+            self.fan_speed = int(fan)
+
+        # Reason / error code.
+        reason = hp.get("reason")
+        if reason is not None:
+            self.reason_code = int(reason)
+
+        # Board firmware version.
+        vr = hp.get("vr")
+        if isinstance(vr, str) and vr:
+            self.board_firmware = vr
 
     async def set_operation_mode(self, mode: str) -> Any:
         normalized = _normalize_mode(mode)
