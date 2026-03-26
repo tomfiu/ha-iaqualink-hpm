@@ -48,6 +48,13 @@ def _normalize_mode(mode: str | None) -> str:
     return "off"
 
 
+def _normalize_preset(preset: str | None) -> str:
+    value = str(preset or "").strip().lower()
+    if value in {"boost", "quiet", "silent", "normal"}:
+        return "quiet" if value == "silent" else value
+    return "normal"
+
+
 @dataclass
 class AqualinkSystem:
     """Minimal system model expected by this integration."""
@@ -145,6 +152,8 @@ class AqualinkHeatPump(AqualinkDevice):
         self.operation_mode = "off"
         self.can_heat = True
         self.can_cool = True
+        self.preset_mode = "normal"
+        self.air_temperature: float | None = None
         super().__init__(client, serial_number, raw)
 
     def update_from_raw(self, raw: dict[str, Any]) -> None:
@@ -157,6 +166,30 @@ class AqualinkHeatPump(AqualinkDevice):
         self.can_heat = True if can_heat is None else _to_bool(can_heat)
         self.can_cool = True if can_cool is None else _to_bool(can_cool)
 
+        self.air_temperature = _to_float(
+            _resolve_first(
+                raw,
+                "air_temperature",
+                "air_temp",
+                "ambient_temp",
+                "ambient_temperature",
+                "outdoor_temp",
+                "outside_temp",
+                "inlet_air_temp",
+            )
+        )
+
+        # Derive preset from dedicated fields or boolean flags.
+        raw_preset = _resolve_first(raw, "preset", "preset_mode")
+        if raw_preset is not None:
+            self.preset_mode = _normalize_preset(str(raw_preset))
+        elif _to_bool(_resolve_first(raw, "boost", "turbo", "boost_mode")):
+            self.preset_mode = "boost"
+        elif _to_bool(_resolve_first(raw, "quiet", "silent", "quiet_mode", "silent_mode")):
+            self.preset_mode = "quiet"
+        else:
+            self.preset_mode = "normal"
+
     async def set_operation_mode(self, mode: str) -> Any:
         normalized = _normalize_mode(mode)
         numeric_map = {"off": 0, "heat": 1, "cool": 2, "auto": 3}
@@ -168,6 +201,23 @@ class AqualinkHeatPump(AqualinkDevice):
                 "operation_mode",
                 "set_mode",
                 "mode",
+            ),
+            value=numeric_map.get(normalized, 0),
+            text_value=normalized,
+        )
+
+    async def set_preset_mode(self, preset: str) -> Any:
+        normalized = _normalize_preset(preset)
+        numeric_map = {"normal": 0, "boost": 1, "quiet": 2}
+        return await self._client.send_device_command(
+            serial=self._serial_number,
+            device=self,
+            action_candidates=(
+                "preset",
+                "boost",
+                "silent",
+                "quiet_mode",
+                "preset_mode",
             ),
             value=numeric_map.get(normalized, 0),
             text_value=normalized,
