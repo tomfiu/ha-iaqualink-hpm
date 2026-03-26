@@ -423,11 +423,18 @@ class AqualinkClient:
         """Fetch device shadow and update device state with operational data."""
         serial = system.serial_number
         try:
-            shadow = await self._request_json(
-                "GET",
-                DEVICE_SHADOW_URL.format(serial=serial),
-                auth_required=True,
-            )
+            shadow = await self._fetch_shadow(serial)
+        except AqualinkAuthenticationException:
+            # id_token (JWT) expired — re-login to obtain a fresh one and retry.
+            _LOGGER.debug("Shadow auth expired for serial=%s, re-logging in", serial)
+            try:
+                await self.login()
+                shadow = await self._fetch_shadow(serial)
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Shadow fetch failed after re-login for serial=%s: %s", serial, err
+                )
+                return
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug(
                 "Shadow fetch failed for serial=%s type=%s: %s",
@@ -446,6 +453,14 @@ class AqualinkClient:
         for device in system.devices:
             merged = {**device._raw, **reported}
             device.update_from_raw(merged)
+
+    async def _fetch_shadow(self, serial: str) -> Any:
+        """Fetch the device shadow for a given serial number."""
+        return await self._request_json(
+            "GET",
+            DEVICE_SHADOW_URL.format(serial=serial),
+            auth_required=True,
+        )
 
     async def _send_systems_request(self) -> Any:
         """Expose raw systems payload for integration diagnostics."""
