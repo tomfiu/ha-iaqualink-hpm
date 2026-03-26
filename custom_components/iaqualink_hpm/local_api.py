@@ -390,6 +390,7 @@ class AqualinkClient:
         if auth_required:
             if not self._token or not self._user_id:
                 raise AqualinkAuthenticationException("Client is not authenticated")
+            headers["Authorization"] = f"Bearer {self._token}"
 
         try:
             response = await self._client.request(
