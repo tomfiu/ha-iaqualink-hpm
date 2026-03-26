@@ -15,10 +15,10 @@ from homeassistant.helpers.httpx_client import get_async_client
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util.ssl import SSL_ALPN_HTTP11_HTTP2
 
-from .const import DOMAIN, PLATFORMS
+from .const import CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL, DOMAIN, PLATFORMS
 from .local_api import AqualinkClient
 
-SCAN_INTERVAL = timedelta(seconds=90)
+SCAN_INTERVAL = timedelta(seconds=DEFAULT_SCAN_INTERVAL)
 _LOGGER = logging.getLogger(__name__)
 
 IaqualinkHpmConfigEntry = ConfigEntry
@@ -374,7 +374,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: IaqualinkHpmConfigEntry)
         await _async_close_if_supported(account_client)
         return False
 
-    coordinator = AqualinkDataUpdateCoordinator(hass, account_client, hpm_systems, systems)
+    scan_seconds = entry.options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+    coordinator = AqualinkDataUpdateCoordinator(
+        hass, account_client, hpm_systems, systems,
+        update_interval=timedelta(seconds=scan_seconds),
+    )
     coordinator.async_set_updated_data(
         {
             system.serial_number: _snapshot_system(system)
@@ -383,12 +387,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: IaqualinkHpmConfigEntry)
         }
     )
     entry.runtime_data = coordinator
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     _LOGGER.debug("Forwarding config entry to platforms=%s", PLATFORMS)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    # Do not block startup on first poll. We already have discovery data and can expose
-    # entities even when the physical unit is currently offline.
-    hass.async_create_task(coordinator.async_request_refresh())
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: IaqualinkHpmConfigEntry) -> None:
+    """React to options changes by reloading the entry."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: IaqualinkHpmConfigEntry) -> bool:
@@ -410,6 +417,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         account_client: Any,
         systems: list[Any],
         all_account_systems: list[Any] | None = None,
+        update_interval: timedelta = SCAN_INTERVAL,
     ) -> None:
         """Initialize."""
         self._account_client = account_client
@@ -427,7 +435,7 @@ class AqualinkDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass,
             logger=_LOGGER,
             name=DOMAIN,
-            update_interval=SCAN_INTERVAL,
+            update_interval=update_interval,
         )
 
     async def _async_update_data(self) -> dict[str, Any]:
