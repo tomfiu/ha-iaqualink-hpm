@@ -19,19 +19,25 @@ TO_REDACT = {
 }
 
 
-def _to_serializable(value: Any) -> Any:
+def _to_serializable(value: Any, _seen: frozenset[int] | None = None) -> Any:
     """Convert nested library objects into JSON-serializable structures."""
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
 
+    seen = _seen or frozenset()
+    obj_id = id(value)
+    if obj_id in seen:
+        return "<circular>"
+    seen = seen | {obj_id}
+
     if isinstance(value, Mapping):
-        return {str(key): _to_serializable(item) for key, item in value.items()}
+        return {str(key): _to_serializable(item, seen) for key, item in value.items()}
 
     if isinstance(value, (list, tuple, set)):
-        return [_to_serializable(item) for item in value]
+        return [_to_serializable(item, seen) for item in value]
 
     if hasattr(value, "__dict__"):
-        return _to_serializable(vars(value))
+        return _to_serializable(vars(value), seen)
 
     return repr(value)
 

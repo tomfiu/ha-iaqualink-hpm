@@ -16,6 +16,8 @@ _LOGGER = logging.getLogger(__name__)
 
 LOGIN_URL = "https://prod.zodiac-io.com/users/v1/login"
 SYSTEMS_URL = "https://r-api.iaqualink.net/devices.json"
+DEVICE_SHADOW_URL = "https://prod.zodiac-io.com/devices/v1/{serial}/shadow"
+DEVICE_COMMAND_URL = "https://prod.zodiac-io.com/devices/v1/{serial}/shadow"
 API_KEY = "EOOEMOW4YR6QNB07"
 SYMBOLS = "!@#$%^&*()"
 
@@ -292,8 +294,39 @@ class AqualinkClient:
         payload = await self._send_systems_request()
         systems = _parse_systems(self, payload)
         if self.serial_number:
-            return [system for system in systems if system.serial_number == self.serial_number]
+            systems = [system for system in systems if system.serial_number == self.serial_number]
+        # Enrich each system's devices with shadow/telemetry data.
+        for system in systems:
+            await self._enrich_system_from_shadow(system)
         return systems
+
+    async def _enrich_system_from_shadow(self, system: AqualinkSystem) -> None:
+        """Fetch device shadow and update device state with operational data."""
+        serial = system.serial_number
+        try:
+            shadow = await self._request_json(
+                "GET",
+                DEVICE_SHADOW_URL.format(serial=serial),
+                auth_required=True,
+            )
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "Shadow fetch failed for serial=%s type=%s: %s",
+                serial,
+                err.__class__.__name__,
+                err,
+            )
+            return
+
+        _LOGGER.debug("Shadow payload for serial=%s: %s", serial, shadow)
+        reported = _extract_shadow_reported(shadow)
+        if not reported:
+            _LOGGER.debug("No reported shadow state for serial=%s", serial)
+            return
+
+        for device in system.devices:
+            merged = {**device._raw, **reported}
+            device.update_from_raw(merged)
 
     async def _send_systems_request(self) -> Any:
         """Expose raw systems payload for integration diagnostics."""
@@ -315,40 +348,16 @@ class AqualinkClient:
     ) -> Any:
         """Best-effort device command dispatch across endpoint variants."""
         errors: list[Exception] = []
-        key = device.key
 
+        # Try the shadow desired-state endpoint first (Zodiac cloud IoT pattern).
+        shadow_url = DEVICE_COMMAND_URL.format(serial=serial)
         for action in action_candidates:
-            attempts = (
-                {"serial": serial, "device": key, "action": action, "value": value},
-                {"serial": serial, "device_key": key, "action": action, "value": value},
-                {"serial": serial, "action": action, "value": value},
-            )
-            for params in attempts:
+            for v in ([value] if text_value is None else [value, text_value]):
                 try:
                     return await self._request_json(
-                        "GET",
-                        SYSTEMS_URL,
-                        params={**params, "api_key": API_KEY, **self._auth_params()},
-                        auth_required=True,
-                    )
-                except AqualinkServiceException as err:
-                    errors.append(err)
-                    continue
-
-        if text_value is not None:
-            for action in action_candidates:
-                try:
-                    return await self._request_json(
-                        "GET",
-                        SYSTEMS_URL,
-                        params={
-                            "api_key": API_KEY,
-                            "serial": serial,
-                            "device": key,
-                            "action": action,
-                            "value": text_value,
-                            **self._auth_params(),
-                        },
+                        "POST",
+                        shadow_url,
+                        json={"state": {"desired": {action: v}}},
                         auth_required=True,
                     )
                 except AqualinkServiceException as err:
@@ -703,4 +712,33 @@ def _resolve_across_records(records: list[dict[str, Any]], *keys: str) -> Any:
         value = _resolve_first(raw, *keys)
         if value is not None and value != "":
             return value
+    return None
+
+
+def _extract_shadow_reported(payload: Any) -> dict[str, Any] | None:
+    """Extract the reported state dict from an AWS IoT device shadow payload.
+
+    Handles both the full shadow format ``{"state": {"reported": {...}}}`` and a
+    flat dict returned by some Zodiac proxy endpoints.
+    """
+    if not isinstance(payload, dict):
+        return None
+    # Full shadow: {"state": {"reported": {...}}}
+    state = payload.get("state")
+    if isinstance(state, dict):
+        reported = state.get("reported")
+        if isinstance(reported, dict):
+            return reported
+        # Some endpoints nest under "desired" only when offline; try both.
+        desired = state.get("desired")
+        if isinstance(desired, dict):
+            return desired
+    # Flat payload — treat the whole dict as reported state if it has sensor keys.
+    sensor_keys = {
+        "temperature", "temp", "water_temp", "target_temperature", "setpoint",
+        "operation_mode", "mode", "air_temperature", "air_temp", "status",
+        "state", "preset", "boost", "quiet",
+    }
+    if any(k in payload for k in sensor_keys):
+        return payload
     return None
