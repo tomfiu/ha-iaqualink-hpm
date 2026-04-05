@@ -95,6 +95,7 @@ To enable one: `Settings` → `Devices & Services` → your device → click the
 | Reason Code | Internal reason / error code |
 | Board Firmware | Firmware version of the heat pump main board |
 | WiFi Signal | WiFi signal strength (dBm) |
+| Shadow Fetch Status | HTTP status code of the last shadow API call (`200`, `429`, etc.) |
 
 ## Polling
 

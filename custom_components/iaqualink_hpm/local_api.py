@@ -104,6 +104,7 @@ class AqualinkDevice:
         self.temperature_unit = "C"
         self.min_temperature = 5
         self.max_temperature = 40
+        self.last_shadow_status: int | None = None
         self.update_from_raw(raw)
 
     def update_from_raw(self, raw: dict[str, Any]) -> None:
@@ -492,7 +493,12 @@ class AqualinkClient:
     async def _enrich_system_from_shadow(self, system: AqualinkSystem) -> None:
         """Fetch device shadow and update device state with operational data."""
         serial = system.serial_number
-        shadow = await self._fetch_shadow_with_retry(serial)
+        shadow, final_status = await self._fetch_shadow_with_retry(serial)
+
+        # Stamp the final HTTP status on every device so sensors can expose it.
+        for device in system.devices:
+            device.last_shadow_status = final_status  # type: ignore[attr-defined]
+
         if shadow is None:
             return
 
@@ -508,12 +514,14 @@ class AqualinkClient:
 
     _SHADOW_RETRY_DELAYS = (4, 8)  # seconds to wait before retry 2 and 3
 
-    async def _fetch_shadow_with_retry(self, serial: str) -> Any | None:
+    async def _fetch_shadow_with_retry(self, serial: str) -> tuple[Any | None, int | None]:
         """Fetch device shadow with retry on 429 and re-auth on 401/403.
 
-        Returns the shadow payload on success, or ``None`` if all attempts fail.
+        Returns ``(shadow_payload, http_status)`` on success, or
+        ``(None, final_http_status)`` if all attempts fail.
         """
         attempt = 1
+        last_status: int | None = None
         while True:
             try:
                 shadow = await self._fetch_shadow(serial)
@@ -523,7 +531,7 @@ class AqualinkClient:
                         serial,
                         attempt,
                     )
-                return shadow
+                return shadow, 200
             except AqualinkAuthenticationException:
                 # id_token (JWT) expired — refresh and retry once.
                 _LOGGER.debug(
@@ -531,16 +539,18 @@ class AqualinkClient:
                 )
                 try:
                     await self.refresh_tokens()
-                    return await self._fetch_shadow(serial)
+                    shadow = await self._fetch_shadow(serial)
+                    return shadow, 200
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.debug(
                         "Shadow fetch failed after re-login for serial=%s: %s",
                         serial,
                         err,
                     )
-                    return None
+                    return None, _extract_status_code(err)
             except AqualinkApiConnectionException as err:
                 is_rate_limited = "429" in str(err)
+                last_status = _extract_status_code(err) or (429 if is_rate_limited else None)
                 retry_after = getattr(err, "retry_after", None)
                 rl_headers = getattr(err, "rate_limit_headers", None)
                 rl_body = getattr(err, "rate_limit_body", None)
@@ -579,7 +589,7 @@ class AqualinkClient:
                     attempt,
                     1 + len(self._SHADOW_RETRY_DELAYS),
                 )
-                return None
+                return None, last_status
             except Exception as err:  # noqa: BLE001
                 _LOGGER.debug(
                     "Shadow fetch failed for serial=%s type=%s: %s",
@@ -587,7 +597,7 @@ class AqualinkClient:
                     err.__class__.__name__,
                     err,
                 )
-                return None
+                return None, _extract_status_code(err)
 
     async def _fetch_shadow(self, serial: str) -> Any:
         """Fetch the device shadow for a given serial number."""
@@ -715,6 +725,23 @@ class AqualinkClient:
             "authentication_token": self._token,
             "user_id": self._user_id,
         }
+
+
+def _extract_status_code(err: BaseException) -> int | None:
+    """Try to pull an HTTP status code from an exception or its cause."""
+    for exc in (err, getattr(err, "__cause__", None)):
+        if exc is None:
+            continue
+        # Attached explicitly by _request_json on 429.
+        code = getattr(exc, "status_code", None)
+        if code is not None:
+            return int(code)
+        # Fall back to parsing the message, e.g. "Rate limited (429): ..."
+        msg = str(exc)
+        for token in ("(429)", "(401)", "(403)", "(500)", "(502)", "(503)"):
+            if token in msg:
+                return int(token.strip("()"))
+    return None
 
 
 def _to_float(value: Any) -> float | None:
