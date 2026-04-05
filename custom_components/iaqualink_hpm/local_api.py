@@ -6,6 +6,7 @@ support directly inside this integration.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 import hashlib
 import hmac
@@ -481,6 +482,9 @@ class AqualinkClient:
         if self.serial_number:
             systems = [system for system in systems if system.serial_number == self.serial_number]
         # Enrich each system's devices with shadow/telemetry data.
+        # Add a small delay between the systems request and shadow fetch to
+        # avoid triggering the Zodiac API's account-level rate limiter.
+        await asyncio.sleep(2)
         for system in systems:
             await self._enrich_system_from_shadow(system)
         return systems
@@ -488,26 +492,8 @@ class AqualinkClient:
     async def _enrich_system_from_shadow(self, system: AqualinkSystem) -> None:
         """Fetch device shadow and update device state with operational data."""
         serial = system.serial_number
-        try:
-            shadow = await self._fetch_shadow(serial)
-        except AqualinkAuthenticationException:
-            # id_token (JWT) expired — refresh to obtain a fresh one and retry.
-            _LOGGER.debug("Shadow auth expired for serial=%s, refreshing tokens", serial)
-            try:
-                await self.refresh_tokens()
-                shadow = await self._fetch_shadow(serial)
-            except Exception as err:  # noqa: BLE001
-                _LOGGER.debug(
-                    "Shadow fetch failed after re-login for serial=%s: %s", serial, err
-                )
-                return
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.debug(
-                "Shadow fetch failed for serial=%s type=%s: %s",
-                serial,
-                err.__class__.__name__,
-                err,
-            )
+        shadow = await self._fetch_shadow_with_retry(serial)
+        if shadow is None:
             return
 
         _LOGGER.debug("Shadow payload for serial=%s: %s", serial, shadow)
@@ -519,6 +505,89 @@ class AqualinkClient:
         for device in system.devices:
             merged = {**device._raw, **reported}
             device.update_from_raw(merged)
+
+    _SHADOW_RETRY_DELAYS = (4, 8)  # seconds to wait before retry 2 and 3
+
+    async def _fetch_shadow_with_retry(self, serial: str) -> Any | None:
+        """Fetch device shadow with retry on 429 and re-auth on 401/403.
+
+        Returns the shadow payload on success, or ``None`` if all attempts fail.
+        """
+        attempt = 1
+        while True:
+            try:
+                shadow = await self._fetch_shadow(serial)
+                if attempt > 1:
+                    _LOGGER.debug(
+                        "Shadow fetch succeeded for serial=%s on attempt %s",
+                        serial,
+                        attempt,
+                    )
+                return shadow
+            except AqualinkAuthenticationException:
+                # id_token (JWT) expired — refresh and retry once.
+                _LOGGER.debug(
+                    "Shadow auth expired for serial=%s, refreshing tokens", serial
+                )
+                try:
+                    await self.refresh_tokens()
+                    return await self._fetch_shadow(serial)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.debug(
+                        "Shadow fetch failed after re-login for serial=%s: %s",
+                        serial,
+                        err,
+                    )
+                    return None
+            except AqualinkApiConnectionException as err:
+                is_rate_limited = "429" in str(err)
+                retry_after = getattr(err, "retry_after", None)
+                rl_headers = getattr(err, "rate_limit_headers", None)
+                rl_body = getattr(err, "rate_limit_body", None)
+                if is_rate_limited:
+                    _LOGGER.debug(
+                        "Shadow 429 for serial=%s (attempt %s/%s): "
+                        "retry_after=%s headers=%s body=%s",
+                        serial,
+                        attempt,
+                        1 + len(self._SHADOW_RETRY_DELAYS),
+                        retry_after,
+                        rl_headers,
+                        rl_body,
+                    )
+                if is_rate_limited and attempt <= len(self._SHADOW_RETRY_DELAYS):
+                    delay = (
+                        int(retry_after)
+                        if retry_after and retry_after.isdigit()
+                        else self._SHADOW_RETRY_DELAYS[attempt - 1]
+                    )
+                    _LOGGER.debug(
+                        "Shadow fetch retrying for serial=%s in %s seconds",
+                        serial,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    attempt += 1
+                    continue
+                # Not a 429 or retries exhausted.
+                _LOGGER.debug(
+                    "Shadow fetch failed for serial=%s type=%s: %s "
+                    "(attempt %s/%s, giving up)",
+                    serial,
+                    err.__class__.__name__,
+                    err,
+                    attempt,
+                    1 + len(self._SHADOW_RETRY_DELAYS),
+                )
+                return None
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Shadow fetch failed for serial=%s type=%s: %s",
+                    serial,
+                    err.__class__.__name__,
+                    err,
+                )
+                return None
 
     async def _fetch_shadow(self, serial: str) -> Any:
         """Fetch the device shadow for a given serial number."""
@@ -610,7 +679,16 @@ class AqualinkClient:
         if response.status_code in {401, 403}:
             raise AqualinkAuthenticationException(f"Unauthorized ({response.status_code})")
         if response.status_code == 429:
-            raise AqualinkApiConnectionException("Rate limited (429): too many requests")
+            exc = AqualinkApiConnectionException("Rate limited (429): too many requests")
+            # Attach response details so callers can log rate-limit diagnostics.
+            exc.rate_limit_headers = {  # type: ignore[attr-defined]
+                k: v
+                for k, v in response.headers.items()
+                if k.lower().startswith(("retry-after", "x-ratelimit", "x-rate-limit"))
+            }
+            exc.retry_after = response.headers.get("Retry-After")  # type: ignore[attr-defined]
+            exc.rate_limit_body = response.text[:500]  # type: ignore[attr-defined]
+            raise exc
         if response.status_code == 400:
             body = response.text.lower()
             if any(token in body for token in ("unauthorized", "authentication", "invalid token")):

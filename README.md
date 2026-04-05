@@ -98,8 +98,17 @@ To enable one: `Settings` → `Devices & Services` → your device → click the
 
 ## Polling
 
-- Default refresh interval: `90 seconds`
+- Default refresh interval: `120 seconds` (configurable: 60–3600 seconds)
 - Integration type: `cloud_polling`
+
+### Rate limiting
+
+The Zodiac cloud API enforces account-level rate limits on the device shadow endpoint.
+To minimize `429` responses:
+
+- A 2-second delay is inserted between the systems request and the shadow fetch within each polling cycle.
+- On `429`, the integration retries up to 2 more times with increasing back-off (4 s, 8 s by default, or the server-provided `Retry-After` value).
+- If all retries fail, the previous sensor values are preserved until the next successful poll — entities will **not** flip to `unknown`.
 
 ## Troubleshooting
 
@@ -120,6 +129,12 @@ To enable one: `Settings` → `Devices & Services` → your device → click the
 - The integration polls the Zodiac device shadow endpoint for telemetry.
 - If the device is offline or not reporting to the cloud, values will be unavailable until the next successful refresh.
 - Check that `Shadow payload for serial=...` appears in debug logs.
+
+### Frequent 429 rate-limit errors
+
+- The Zodiac API rate limit is per-account and shared with the official iAqualink / Zodiac mobile app. Close or force-stop the app to free up budget.
+- Increase the polling interval in `Settings` -> `Devices & Services` -> `iAqualink Heat Pump` -> `Configure`.
+- In debug logs, look for `Shadow 429 for serial=...` entries — they include the server's `Retry-After` header and rate-limit response details to help diagnose the limit.
 
 ### Enable debug logging
 
