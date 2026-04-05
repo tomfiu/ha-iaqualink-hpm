@@ -14,6 +14,7 @@ from homeassistant.const import (
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     UnitOfTemperature,
 )
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
@@ -324,7 +325,7 @@ class AqualinkShadowFetchStatusSensor(_AqualinkSensorBase):
     _attr_name = "Shadow Fetch Status"
     _attr_entity_registry_enabled_default = False
     _attr_icon = "mdi:cloud-sync"
-    _attr_entity_category = "diagnostic"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: Any, system: Any, device: Any) -> None:
         super().__init__(coordinator, system, device, "shadow_fetch_status")
