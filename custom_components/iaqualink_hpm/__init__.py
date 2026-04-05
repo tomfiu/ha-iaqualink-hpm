@@ -306,6 +306,7 @@ def _snapshot_device(device: Any) -> dict[str, Any]:
         "reason_code",
         "board_firmware",
         "wifi_rssi",
+        "last_shadow_status",
     )
     snapshot = {attr: getattr(device, attr, None) for attr in attrs}
     snapshot["raw"] = dict(getattr(device, "_raw", {}))

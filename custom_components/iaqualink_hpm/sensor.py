@@ -53,6 +53,7 @@ async def async_setup_entry(
                 entities.append(AqualinkReasonCodeSensor(coordinator, system, device))
                 entities.append(AqualinkBoardFirmwareSensor(coordinator, system, device))
                 entities.append(AqualinkWifiRssiSensor(coordinator, system, device))
+                entities.append(AqualinkShadowFetchStatusSensor(coordinator, system, device))
 
     _LOGGER.debug("Adding %s sensor entities", len(entities))
     async_add_entities(entities)
@@ -315,3 +316,19 @@ class AqualinkWifiRssiSensor(_AqualinkSensorBase):
     @property
     def native_value(self) -> int | None:
         return getattr(self._device, "wifi_rssi", None)
+
+
+class AqualinkShadowFetchStatusSensor(_AqualinkSensorBase):
+    """HTTP status code of the last shadow fetch (200, 429, etc.)."""
+
+    _attr_name = "Shadow Fetch Status"
+    _attr_entity_registry_enabled_default = False
+    _attr_icon = "mdi:cloud-sync"
+    _attr_entity_category = "diagnostic"
+
+    def __init__(self, coordinator: Any, system: Any, device: Any) -> None:
+        super().__init__(coordinator, system, device, "shadow_fetch_status")
+
+    @property
+    def native_value(self) -> int | None:
+        return getattr(self._device, "last_shadow_status", None)
