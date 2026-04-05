@@ -269,7 +269,10 @@ def _merge_system_state(existing_system: Any, latest_system: Any) -> None:
             continue
 
         try:
-            existing_device.__dict__.update(vars(latest_device))
+            for attr, value in vars(latest_device).items():
+                if value is None and getattr(existing_device, attr, None) is not None:
+                    continue
+                existing_device.__dict__[attr] = value
         except TypeError:
             pass
         merged_devices.append(existing_device)
