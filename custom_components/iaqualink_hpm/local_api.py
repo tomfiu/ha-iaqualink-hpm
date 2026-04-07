@@ -942,10 +942,10 @@ def _device_type(raw: dict[str, Any]) -> str:
 
 def _is_heat_pump_device(raw: dict[str, Any]) -> bool:
     value = _device_type(raw)
-    if any(token in value for token in ("heatpump", "heat_pump", "hpm", "z400")):
+    if any(token in value for token in ("heatpump", "heat_pump", "hpm", "z400", "zs500", "zs")):
         return True
     name = str(_resolve_first(raw, "name", "label") or "").lower()
-    if "heat pump" in name or "z400" in name:
+    if "heat pump" in name or "z400" in name or "zs500" in name or "z550" in name or "z5550" in name:
         return True
     # Offline payloads can omit explicit device type but still carry HPM controls.
     return any(
@@ -1038,7 +1038,7 @@ def _parse_systems(client: AqualinkClient, payload: Any) -> list[AqualinkSystem]
 
         devices = _parse_devices(client, serial, raw_devices)
         sys_type = _system_type(serial_records, raw_devices)
-        if not devices and sys_type in {"hpm", "heatpump", "heat_pump", "hp"}:
+        if not devices and sys_type in {"hpm", "heatpump", "heat_pump", "hp", "zs500"}:
             fallback_name = str(_resolve_first(serial_records[0], "name", "label") or "Heat Pump")
             devices = [
                 AqualinkHeatPump(
