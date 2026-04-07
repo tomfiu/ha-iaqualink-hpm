@@ -246,6 +246,9 @@ class AqualinkHeatPump(AqualinkDevice):
             sensor_value = _to_float(val.get("value"))
             if sensor_value is None:
                 continue
+            # zs500/Z550iQ reports values × 10 (e.g. 179 = 17.9°C)
+            if sensor_value > 100:
+                sensor_value = sensor_value / 10
             if sensor_type == "water":
                 self.temperature = sensor_value
             elif sensor_type == "air":
@@ -254,11 +257,16 @@ class AqualinkHeatPump(AqualinkDevice):
         # Target set-point temperature (tsp field).
         tsp = _to_float(hp.get("tsp"))
         if tsp is not None:
+            # zs500/Z550iQ reports values × 10
+            if tsp > 100:
+                tsp = tsp / 10
             self.target_temperature = tsp
 
         # Minimum setpoint from tmp field.
         tmp_min = _to_float(hp.get("tmp"))
         if tmp_min is not None:
+            if tmp_min > 100:
+                tmp_min = tmp_min / 10
             self.min_temperature = int(tmp_min)
 
         # Status code.
