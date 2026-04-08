@@ -111,12 +111,12 @@ def _extract_raw_systems(payload: Any) -> list[dict[str, Any]]:
 def _is_hpm_system(system: Any) -> bool:
     """Best-effort check if system represents a heat pump installation."""
     system_type = str(getattr(system, "type", "") or "").strip().lower()
-    if system_type in {"hpm", "heatpump", "heat_pump", "hp"}:
+    if system_type in {"hpm", "heatpump", "heat_pump", "hp", "zs500"}:
         return True
 
     model = str(getattr(system, "model", "") or "").lower()
     name = str(getattr(system, "name", "") or "").lower()
-    if "z400" in model or "heat pump" in name:
+    if "z400" in model or "zs500" in model or "z550" in model or "z5550" in model or "heat pump" in name:
         return True
 
     for device in getattr(system, "devices", []):

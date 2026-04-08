@@ -186,6 +186,8 @@ class AqualinkHeatPump(AqualinkDevice):
         self.board_firmware: str | None = None
         # Fields from the top-level shadow debug block.
         self.wifi_rssi: int | None = None
+        # zs500/Z550iQ devices report values × 10; detected during parsing.
+        self._uses_scaled_temps = False
         super().__init__(client, serial_number, raw)
 
     def update_from_raw(self, raw: dict[str, Any]) -> None:
@@ -236,8 +238,18 @@ class AqualinkHeatPump(AqualinkDevice):
             if rssi is not None:
                 self.wifi_rssi = int(rssi)
 
+    @property
+    def _is_zs500(self) -> bool:
+        """Check if this device is a zs500/Z550iQ variant that uses scaled temps."""
+        device_type = str(self._raw.get("device_type") or self._raw.get("type") or "").lower()
+        return "zs500" in device_type or "z550" in device_type
+
     def _apply_hp_equipment_state(self, hp: dict[str, Any]) -> None:
         """Parse temperatures, setpoint and mode from the equipment.hp_0 block."""
+        is_zs500 = self._is_zs500
+        if is_zs500:
+            self._uses_scaled_temps = True
+
         # Sensor readings: sns_1 (water), sns_2 (air), etc.
         for val in hp.values():
             if not isinstance(val, dict):
@@ -246,6 +258,9 @@ class AqualinkHeatPump(AqualinkDevice):
             sensor_value = _to_float(val.get("value"))
             if sensor_value is None:
                 continue
+            # zs500/Z550iQ reports values × 10 (e.g. 179 = 17.9°C)
+            if is_zs500 and sensor_value > 100:
+                sensor_value = sensor_value / 10
             if sensor_type == "water":
                 self.temperature = sensor_value
             elif sensor_type == "air":
@@ -254,11 +269,15 @@ class AqualinkHeatPump(AqualinkDevice):
         # Target set-point temperature (tsp field).
         tsp = _to_float(hp.get("tsp"))
         if tsp is not None:
+            if is_zs500 and tsp > 100:
+                tsp = tsp / 10
             self.target_temperature = tsp
 
         # Minimum setpoint from tmp field.
         tmp_min = _to_float(hp.get("tmp"))
         if tmp_min is not None:
+            if is_zs500 and tmp_min > 100:
+                tmp_min = tmp_min / 10
             self.min_temperature = int(tmp_min)
 
         # Status code.
@@ -942,10 +961,10 @@ def _device_type(raw: dict[str, Any]) -> str:
 
 def _is_heat_pump_device(raw: dict[str, Any]) -> bool:
     value = _device_type(raw)
-    if any(token in value for token in ("heatpump", "heat_pump", "hpm", "z400")):
+    if any(token in value for token in ("heatpump", "heat_pump", "hpm", "z400", "zs500", "zs5")):
         return True
     name = str(_resolve_first(raw, "name", "label") or "").lower()
-    if "heat pump" in name or "z400" in name:
+    if "heat pump" in name or "z400" in name or "zs500" in name or "z550" in name or "z5550" in name:
         return True
     # Offline payloads can omit explicit device type but still carry HPM controls.
     return any(
@@ -1038,7 +1057,7 @@ def _parse_systems(client: AqualinkClient, payload: Any) -> list[AqualinkSystem]
 
         devices = _parse_devices(client, serial, raw_devices)
         sys_type = _system_type(serial_records, raw_devices)
-        if not devices and sys_type in {"hpm", "heatpump", "heat_pump", "hp"}:
+        if not devices and sys_type in {"hpm", "heatpump", "heat_pump", "hp", "zs500"}:
             fallback_name = str(_resolve_first(serial_records[0], "name", "label") or "Heat Pump")
             devices = [
                 AqualinkHeatPump(
