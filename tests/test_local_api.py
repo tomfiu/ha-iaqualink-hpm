@@ -30,6 +30,7 @@ AqualinkThermostat = _LOCAL_API.AqualinkThermostat
 _build_login_payloads = _LOCAL_API._build_login_payloads
 _extract_auth_token = _LOCAL_API._extract_auth_token
 _hmac_password = _LOCAL_API._hmac_password
+_is_heat_pump_device = _LOCAL_API._is_heat_pump_device
 _parse_systems = _LOCAL_API._parse_systems
 _sha1_password = _LOCAL_API._sha1_password
 
@@ -296,3 +297,103 @@ class TestAqualinkClientAsync(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("failure-2", str(ctx.exception))
         self.assertEqual(len(calls), 2)
+
+
+class TestZs500DeviceTypeRecognition(unittest.TestCase):
+    """Verify zs500/Z550iQ device types are recognized as heat pumps."""
+
+    def test_zs500_recognized_as_heat_pump(self) -> None:
+        self.assertTrue(_is_heat_pump_device({"device_type": "zs500"}))
+
+    def test_zs500_uppercase_recognized(self) -> None:
+        self.assertTrue(_is_heat_pump_device({"device_type": "ZS500"}))
+
+    def test_zs5_prefix_recognized(self) -> None:
+        self.assertTrue(_is_heat_pump_device({"device_type": "zs550"}))
+
+    def test_z550_in_name_recognized(self) -> None:
+        self.assertTrue(_is_heat_pump_device({"device_type": "unknown", "name": "Z550iQ Pool"}))
+
+    def test_z5550_in_name_recognized(self) -> None:
+        self.assertTrue(_is_heat_pump_device({"device_type": "unknown", "name": "Z5550 QI"}))
+
+    def test_unrelated_device_not_recognized(self) -> None:
+        self.assertFalse(_is_heat_pump_device({"device_type": "cyclonext", "name": "Pool Robot"}))
+
+    def test_zs_prefix_alone_not_matched(self) -> None:
+        """Ensure 'zs' alone doesn't match — only 'zs5' or longer."""
+        self.assertFalse(_is_heat_pump_device({"device_type": "zs100"}))
+
+    def test_parse_systems_recognizes_zs500(self) -> None:
+        """A zs500 device should produce an AqualinkHeatPump."""
+        payload = {
+            "systems": [
+                {
+                    "serial_number": "ZS500TEST01",
+                    "name": "Z5550 QI",
+                    "device_type": "zs500",
+                    "devices": [
+                        {"key": "hp1", "device_type": "zs500", "name": "Z5550 QI"},
+                    ],
+                }
+            ]
+        }
+        systems = _parse_systems(SimpleNamespace(), payload)
+        self.assertEqual(len(systems), 1)
+        self.assertTrue(
+            any(isinstance(d, AqualinkHeatPump) for d in systems[0].devices)
+        )
+
+
+class TestZs500TemperatureScaling(unittest.TestCase):
+    """Verify zs500 temperature values are divided by 10."""
+
+    def _make_zs500_hp(self, hp_state: dict) -> AqualinkHeatPump:
+        raw = {
+            "device_type": "zs500",
+            "name": "Z5550 QI",
+            "equipment": {"hp_0": hp_state},
+        }
+        return AqualinkHeatPump(SimpleNamespace(), "ZS500TEST01", raw)
+
+    def test_water_temp_scaled(self) -> None:
+        hp = self._make_zs500_hp({
+            "sns_1": {"type": "water", "state": "connected", "value": 184},
+        })
+        self.assertAlmostEqual(hp.temperature, 18.4)
+
+    def test_air_temp_scaled(self) -> None:
+        hp = self._make_zs500_hp({
+            "sns_2": {"type": "air", "state": "connected", "value": 193},
+        })
+        self.assertAlmostEqual(hp.air_temperature, 19.3)
+
+    def test_target_temp_scaled(self) -> None:
+        hp = self._make_zs500_hp({"tsp": 210})
+        self.assertAlmostEqual(hp.target_temperature, 21.0)
+
+    def test_min_temp_scaled(self) -> None:
+        hp = self._make_zs500_hp({"tmp": 150})
+        self.assertEqual(hp.min_temperature, 15)
+
+    def test_non_zs500_temps_not_scaled(self) -> None:
+        """A non-zs500 device with Fahrenheit values should not be scaled."""
+        raw = {
+            "device_type": "hpm",
+            "name": "Pool Heater",
+            "equipment": {
+                "hp_0": {
+                    "sns_1": {"type": "water", "state": "connected", "value": 104},
+                    "tsp": 108,
+                }
+            },
+        }
+        hp = AqualinkHeatPump(SimpleNamespace(), "SER123", raw)
+        self.assertAlmostEqual(hp.temperature, 104.0)
+        self.assertAlmostEqual(hp.target_temperature, 108.0)
+
+    def test_uses_scaled_temps_flag(self) -> None:
+        hp = self._make_zs500_hp({
+            "sns_1": {"type": "water", "state": "connected", "value": 184},
+        })
+        self.assertTrue(hp._uses_scaled_temps)
