@@ -950,7 +950,7 @@ def _device_type(raw: dict[str, Any]) -> str:
 
 def _is_heat_pump_device(raw: dict[str, Any]) -> bool:
     value = _device_type(raw)
-    if any(token in value for token in ("heatpump", "heat_pump", "hpm", "z400", "zs500", "zs")):
+    if any(token in value for token in ("heatpump", "heat_pump", "hpm", "z400", "zs500", "zs5")):
         return True
     name = str(_resolve_first(raw, "name", "label") or "").lower()
     if "heat pump" in name or "z400" in name or "zs500" in name or "z550" in name or "z5550" in name:
